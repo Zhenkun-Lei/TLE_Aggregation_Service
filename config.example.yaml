@@ -1,0 +1,25 @@
+timezone: Asia/Shanghai
+
+storage:
+  root: ./archive
+  database: ./archive/tle.db
+
+policy:
+  # One daily run is intentionally much lower than Space-Track's GP limit.
+  max_attempts_per_source: 1
+  request_timeout_seconds: 60
+  min_interval_minutes: 1440
+  user_agent: tle-aggregation-service/0.1
+
+sources:
+  spacetrack:
+    enabled: true
+    base_url: https://www.space-track.org
+    username_env: SPACE_TRACK_USER
+    password_env: SPACE_TRACK_PASSWORD
+    query: /basicspacedata/query/class/gp/DECAY_DATE/null-val/EPOCH/%3Enow-10/ORDERBY/NORAD_CAT_ID/format/json
+    format: json
+
+outputs:
+  canonical: omm-jsonl
+  legacy_tle: true

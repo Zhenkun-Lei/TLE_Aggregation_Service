@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily TLE Aggregation download
+
+[Timer]
+OnCalendar=*-*-* 03:20:00 Asia/Shanghai
+Persistent=true
+RandomizedDelaySec=300
+Unit=tle-aggregation.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,13 @@
+[Unit]
+Description=TLE Aggregation Service one-shot download
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/lzk/TLE_Aggregation_Service
+Environment=PYTHONPATH=/home/lzk/TLE_Aggregation_Service/src
+EnvironmentFile=/home/lzk/.config/tle-aggregation/credentials.env
+ExecStart=/usr/bin/python3 -m tle_aggregation.cli --config /home/lzk/TLE_Aggregation_Service/config.yaml fetch
+User=jetson
+Group=jetson
