@@ -17,17 +17,17 @@
 - 账号和密码只从环境变量读取，不写入 YAML、源代码、日志或归档；
 - 对 HTTP 401、403、404、网络错误、空响应、HTML 响应和非法 JSON 直接失败；
 - 下载成功后使用临时文件原子替换，避免中断时留下半个数据文件；
-- 原始 JSON 保存到 `archive/raw/spacetrack/YYYY-MM-DD/`；每次成功下载的记录同时写入 SQLite 数据库。
+- 原始 JSON 保存到 `archive/raw/spacetrack/YYYY-MM-DD/`（按配置的本地时区命名）；每次成功下载的记录同时写入 SQLite 数据库。
 - SQLite 保存下载运行信息和 GP 历史记录，可按 NORAD 目录号或每个对象的最新历元查询。
 
-当前版本尚未实现：CelesTrak 适配器、SatNOGS 适配器、持久化全局限速状态、OMM 规范化、TLE 导出、manifest 和源间回退。自动每日调度已经提供 systemd service/timer 文件，但需要在部署主机上完成安装和凭据配置。
+当前版本尚未实现：CelesTrak 适配器、SatNOGS 适配器、OMM 规范化、TLE 导出、manifest 和源间回退。已经提供的能力包括：基于 `min_interval_minutes` 的跨进程下载限频、用 SQLite 文件锁避免并发 `fetch`、`compact` 数据库维护命令，以及 systemd service/timer 每日调度（需要在部署主机上完成安装和凭据配置）。
 
 ## 实际表现
 
 已完成的本地验证：
 
 ```text
-4 个离线单元测试全部通过
+11 个离线单元测试全部通过
 Python compileall 编译检查通过
 示例配置校验通过
 缺少凭据时 fetch 安全退出，不发起请求、不重试
@@ -35,7 +35,7 @@ Python compileall 编译检查通过
 
 测试不会访问外网。真实 Space-Track 下载只有在用户主动设置环境变量并执行 `fetch` 时才会发生。
 
-已完成一次真实接口下载：2026-09-20 归档文件大小约 47.0 MiB，包含 31,927 条 GP JSON 记录，JSON 结构校验通过。该结果说明当前登录、接口请求、响应解析和原始文件归档链路可用；它不代表后续请求可以高频执行。
+已在 nano72 上完成多次真实接口下载：单次归档约 36 MiB / 31,967 条 GP JSON 记录，首次快照约 47.0 MiB / 31,927 条，JSON 结构校验通过。该结果说明当前登录、接口请求、响应解析和原始文件归档链路可用；它不代表后续请求可以高频执行。
 
 ## 环境要求
 
@@ -75,8 +75,10 @@ storage:
   database: ./archive/tle.db
 
 policy:
-  min_interval_minutes: 1440
+  max_attempts_per_source: 1
+  min_interval_minutes: 1200
   request_timeout_seconds: 60
+  user_agent: tle-aggregation-service/0.1
 
 sources:
   spacetrack:
@@ -86,7 +88,15 @@ sources:
     query: /basicspacedata/query/class/gp/DECAY_DATE/null-val/EPOCH/%3Enow-10/ORDERBY/NORAD_CAT_ID/format/json
 ```
 
-`min_interval_minutes` 当前用于配置校验，默认值为 1440 分钟。当前 CLI 尚未持久化或执行跨进程限速状态，因此不要并发或频繁启动 `fetch`。
+`min_interval_minutes` 默认值为 1200 分钟（20 小时），模板 `config.example.yaml` 和代码兜底默认值保持一致。CLI 会根据数据库中的最近一次成功运行时间执行跨进程限频，并使用 SQLite 锁避免并发 `fetch`。需要人工强制执行时使用 `fetch --force`。
+
+请让 `min_interval_minutes` 保持**低于 systemd timer 的调度周期**：timer 为 24 小时（`RandomizedDelaySec=300`，即最多提前/推后 5 分钟），因此两次计划运行的间隔最小可能只有 1435 分钟。若把该值设为 1440，随机延迟会让计划任务偶尔被判为“未到间隔”而跳过，表现为某天没有下载。当前默认 1200 保留了 235 分钟余量。
+
+```text
+fetch skipped; last successful run was 2026-09-21T09:11:15.372058+00:00; minimum interval has 49825s remaining
+```
+
+上面是限频命中时的输出：`fetch` 以退出码 0 结束，不会发起任何请求，也不会重试。
 
 ## 凭据设置
 
@@ -121,13 +131,22 @@ configuration valid; credentials are not checked
 PYTHONPATH=src python3 -m tle_aggregation.cli --config config.yaml fetch
 ```
 
+本项目使用 `src` 布局，直接手动运行 `python3 -m tle_aggregation.cli ...` 时必须设置 `PYTHONPATH=src`；systemd service 已经自动设置该环境变量。账号环境变量也需要先加载，例如：
+
+```bash
+set -a
+. /home/lzk/.config/tle-aggregation/credentials.env
+set +a
+PYTHONPATH=src python3 -m tle_aggregation.cli --config config.yaml fetch --force
+```
+
 成功后会输出归档文件路径，例如：
 
 ```text
-archive/raw/spacetrack/2026-09-20/gp-032000.json
+archive/raw/spacetrack/2026-09-21/gp-032000.json
 ```
 
-本命令只执行一次登录和一次 GP 请求。当前代码不做自动重试，因此遇到 401、403、404 或网络错误时会直接退出，避免重复请求导致账号或 IP 被限制。
+本命令只执行一次登录和一次 GP 请求。成功下载后 SQLite 会自动压缩为每个卫星的最新记录，完整 JSON 仍保留在按日期归档的文件中。当前代码不做自动重试，因此遇到 401、403、404 或网络错误时会直接退出，避免重复请求导致账号或 IP 被限制。
 
 ### 3. 查看归档
 
@@ -135,6 +154,10 @@ archive/raw/spacetrack/2026-09-20/gp-032000.json
 find archive/raw/spacetrack -type f -name '*.json' -print
 python3 -m json.tool archive/raw/spacetrack/YYYY-MM-DD/gp-HHMMSS.json >/dev/null
 ```
+
+归档路径为 `archive/raw/spacetrack/<YYYY-MM-DD>/gp-<HHMMSS>.json`，目录名和文件名都按配置的 `timezone`（默认 `Asia/Shanghai`）生成，而数据库中的 `runs.retrieved_at` 始终是 UTC。例如 UTC `2026-09-20T19:21:27Z` 在上海时间是 09-21 03:21:27，归档为 `archive/raw/spacetrack/2026-09-21/gp-032127.json`。
+
+> 历史数据说明：2026-09-21 08:13 UTC 之前部署的版本按 **UTC** 命名归档（例如 `archive/raw/spacetrack/2026-09-20/gp-192127.json`），之后的版本改为按配置时区命名。既有原始文件保持原样、未做重命名（原始归档视为不可变证据），因此早期目录中可能混有两种命名。需要定位某个批次时，请以数据库 `runs.payload_path` 为准，不要从文件名反推时间。
 
 ### 4. 查询 SQLite
 
@@ -150,7 +173,23 @@ PYTHONPATH=src python3 -m tle_aggregation.cli --config config.yaml query
 PYTHONPATH=src python3 -m tle_aggregation.cli --config config.yaml --norad 25544 query
 ```
 
-SQLite 文件默认是 `archive/tle.db`。表 `runs` 保存每次下载，表 `gp_records` 保存每条 GP 历史记录；原始 JSON 路径仍保存在 `payload_path` 中。
+SQLite 文件默认是 `archive/tle.db`。表 `runs` 保存每次下载，表 `gp_records` 保存每个卫星最新的 GP 记录（每次 `fetch` 成功后会立刻执行一次 `compact --latest-only`）；原始 JSON 路径保存在 `runs.payload_path` 中。
+
+### 5. 迁移和瘦身数据库
+
+`fetch` 每次成功后都会自动执行等价的 `compact --latest-only`，因此日常运行不需要手动调用本命令。手动命令用于：迁移旧数据库结构、按保留窗口裁剪历史、或对已有数据库重新执行 `VACUUM` 回收空间。
+
+新版数据库使用短 SHA-256 哈希去重，不再把完整 `raw_json` 放进唯一索引。对旧数据库执行迁移并只保留每个卫星最新记录：
+
+```bash
+PYTHONPATH=src python3 -m tle_aggregation.cli --config config.yaml --latest-only compact
+```
+
+该命令会先迁移表结构，再删除历史记录并执行 SQLite `VACUUM`。执行前应备份 `archive/tle.db`。如果需要保留最近一段历史，可以改用：
+
+```bash
+PYTHONPATH=src python3 -m tle_aggregation.cli --config config.yaml --keep-history-days 90 compact
+```
 
 ## 运行测试
 
@@ -162,11 +201,14 @@ PYTHONPATH=src python3 -m tle_aggregation.cli --config config.example.yaml valid
 
 测试内容包括：
 
-- 示例配置能够加载；
-- HTTP 数据源被拒绝；
-- 非法 JSON 被拒绝；
+- 示例配置能够加载，且不需要读取真实凭据；
+- HTTP 数据源被拒绝，未知时区被拒绝；
+- `min_interval_minutes` 的默认值与模板一致，并低于 24 小时调度周期；
+- 非法 JSON、HTML 响应等异常被拒绝且不重试；
 - 合法 JSON 数组能够通过；
-- 配置校验不需要读取真实凭据。
+- 归档目录与文件名按配置的本地时区生成；
+- 入库保留历史并可按历元查询最新记录，`compact` 只保留每个卫星最新一条；
+- 旧结构数据库可迁移到哈希去重，且 `migrate_database` 幂等。
 
 ## 目录说明
 
@@ -176,7 +218,7 @@ config.example.yaml                         配置模板
 src/tle_aggregation/config.py               配置和环境变量校验
 src/tle_aggregation/database.py              SQLite 建表、入库和查询
 src/tle_aggregation/spacetrack.py           Space-Track 登录、请求和原始归档
-src/tle_aggregation/cli.py                  validate/fetch 命令入口
+src/tle_aggregation/cli.py                  validate/fetch/query/compact 命令入口
 tests/                                      离线测试
 archive/                                    下载后生成，已加入 .gitignore
 deploy/tle-aggregation.service              systemd 单次下载服务
@@ -239,24 +281,38 @@ systemctl status --no-pager tle-aggregation.service
 journalctl -u tle-aggregation.service -n 100 --no-pager
 ```
 
-服务失败时不会删除旧 JSON 或 SQLite 数据。当前已将已有快照初始化到 nano72 的 `archive/tle.db`：1 个下载批次、31,927 条 GP 记录。
+服务失败时不会删除旧 JSON 或 SQLite 数据。当前 nano72 的 `archive/tle.db` 已记录 4 个成功下载批次：初始化快照 31,927 条 GP 记录，最近一次 31,967 条；由于每次 `fetch` 后自动 compact，`gp_records` 只保留每个卫星的最新一条。
+
+运维提示：
+
+- 主机时区是 `Etc/UTC`，而 timer 使用 `Asia/Shanghai`，因此实际触发时间是 UTC 19:20（= 北京时间次日 03:20）；
+- 手动执行 `fetch --force` 或 `systemctl start tle-aggregation.service` 会刷新“最近一次成功运行时间”，可能让紧随其后的计划任务被判为“未到间隔”而跳过。手动补跑后请确认下一次计划运行与它的间隔大于 `min_interval_minutes`。
 
 如果远端尚未执行 systemd 安装，使用具备 sudo 权限的账号执行上面的安装命令。当前 SSH 账号可以写入项目目录，但不能免密码执行 sudo，因此无法由自动部署脚本代替这一步。凭据文件也必须由管理员或你本人写入，文件权限应为 `600`。
 
-## 一个月后的分析
+## 长期运行后的分析
 
-数据库会保留不同下载批次和不同历元的历史记录，不会只保留最新值。常用查询示例：
+`fetch` 每次成功后都会自动执行 `compact --latest-only`，所以 SQLite 默认是**当前状态缓存**：每个卫星只保留最新一条记录，不再累积多批次历史。需要历史历元时，请从按日期归档的原始 JSON 中读取。
+
+常用查询（部署主机通常没有安装 `sqlite3` 命令行，以下示例直接使用 Python 标准库）：
+
+```bash
+python3 -c "import sqlite3;print('objects', sqlite3.connect('archive/tle.db').execute('SELECT COUNT(*) FROM gp_records').fetchone()[0])"
+python3 -c "import sqlite3;print(*sqlite3.connect('archive/tle.db').execute('SELECT MIN(epoch), MAX(epoch) FROM gp_records').fetchone(), sep='\n')"
+python3 -c "import sqlite3;[print(r) for r in sqlite3.connect('archive/tle.db').execute('SELECT run_id, retrieved_at, record_count, payload_path FROM runs ORDER BY run_id')]"
+```
+
+如果确实安装了 `sqlite3`，也可以直接执行等价 SQL：
 
 ```bash
 sqlite3 archive/tle.db 'SELECT COUNT(*) FROM gp_records;'
-sqlite3 archive/tle.db 'SELECT COUNT(*), MIN(epoch), MAX(epoch) FROM gp_records;'
-sqlite3 archive/tle.db 'SELECT norad_cat_id, COUNT(*), MIN(epoch), MAX(epoch) FROM gp_records GROUP BY norad_cat_id ORDER BY COUNT(*) DESC LIMIT 20;'
+sqlite3 archive/tle.db 'SELECT * FROM runs ORDER BY run_id;'
 ```
 
-也可以使用项目命令查询 JSON：
+也可以使用项目命令查询并输出完整 JSON：
 
 ```bash
 PYTHONPATH=src python3 -m tle_aggregation.cli --config config.yaml --norad 25544 query
 ```
 
-`runs` 表记录每次下载时间、记录数和对应原始 JSON 路径；`gp_records` 表记录对象编号、名称、国际设计ator、历元、来源和完整原始记录。原始 JSON 与 SQLite 应同时保留，便于一个月后复核解析结果。
+`runs` 表记录每次下载时间、记录数和对应原始 JSON 路径；`gp_records` 表记录对象编号、名称、国际编号、历元、来源、完整原始记录和短哈希。原始 JSON 归档用于复核，SQLite 作为当前状态缓存，每个卫星只保留最新记录。

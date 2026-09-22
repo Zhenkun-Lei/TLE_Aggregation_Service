@@ -4,6 +4,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
 
@@ -47,12 +48,20 @@ def load_config(path: str | Path) -> AppConfig:
     base_url = str(source["base_url"]).rstrip("/")
     if urlparse(base_url).scheme != "https":
         raise ConfigError("Space-Track base_url must use HTTPS")
-    interval = int(policy.get("min_interval_minutes", 1440))
+    # The default stays below the 24h systemd timer period; otherwise the
+    # randomized daily run can be rejected by the fetch rate limiter.
+    interval = int(policy.get("min_interval_minutes", 1200))
     if interval < 60:
         raise ConfigError("min_interval_minutes must be at least 60")
 
+    timezone_name = str(raw.get("timezone", "Asia/Shanghai"))
+    try:
+        ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError as exc:
+        raise ConfigError(f"unknown timezone: {timezone_name}") from exc
+
     return AppConfig(
-        timezone=str(raw.get("timezone", "Asia/Shanghai")),
+        timezone=timezone_name,
         archive_root=Path(storage.get("root", "./archive")),
         database_path=Path(storage.get("database", "./archive/tle.db")),
         min_interval_minutes=interval,

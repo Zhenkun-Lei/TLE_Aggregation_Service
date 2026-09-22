@@ -9,9 +9,10 @@ from urllib.request import HTTPCookieProcessor
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from http.cookiejar import CookieJar
+from zoneinfo import ZoneInfo
 
 from .config import AppConfig, credentials
-from .database import ingest_gp_payload
+from .database import compact_database, ingest_gp_payload
 
 
 class SpaceTrackError(RuntimeError):
@@ -71,13 +72,17 @@ class SpaceTrackClient:
             raise SpaceTrackError("Space-Track GP response is not a JSON array")
         return payload
 
-    def fetch_and_archive(self) -> Path:
+    def fetch_and_archive(self, now: datetime | None = None) -> Path:
         self.login()
         payload = self.fetch_gp()
-        now = datetime.now(timezone.utc)
-        target_dir = self.config.archive_root / "raw" / "spacetrack" / now.strftime("%Y-%m-%d")
+        now = now or datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        now_utc = now.astimezone(timezone.utc)
+        local_now = now_utc.astimezone(ZoneInfo(self.config.timezone))
+        target_dir = self.config.archive_root / "raw" / "spacetrack" / local_now.strftime("%Y-%m-%d")
         target_dir.mkdir(parents=True, exist_ok=True)
-        target = target_dir / f"gp-{now.strftime('%H%M%S')}.json"
+        target = target_dir / f"gp-{local_now.strftime('%H%M%S')}.json"
         temporary = target.with_suffix(".tmp")
         temporary.write_bytes(payload)
         temporary.replace(target)
@@ -86,6 +91,9 @@ class SpaceTrackClient:
             payload,
             source="spacetrack",
             payload_path=str(target),
-            retrieved_at=now.isoformat(),
+            retrieved_at=now_utc.isoformat(),
         )
+        # The production database is a current-state cache. Full payloads remain
+        # available in the dated archive, while SQLite keeps one row per object.
+        compact_database(self.config.database_path, latest_only=True)
         return target
