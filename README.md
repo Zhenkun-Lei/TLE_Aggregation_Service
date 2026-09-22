@@ -76,7 +76,7 @@ storage:
 
 policy:
   max_attempts_per_source: 1
-  min_interval_minutes: 1200
+  min_interval_minutes: 300
   request_timeout_seconds: 60
   user_agent: tle-aggregation-service/0.1
 
@@ -88,9 +88,14 @@ sources:
     query: /basicspacedata/query/class/gp/DECAY_DATE/null-val/EPOCH/%3Enow-10/ORDERBY/NORAD_CAT_ID/format/json
 ```
 
-`min_interval_minutes` 默认值为 1200 分钟（20 小时），模板 `config.example.yaml` 和代码兜底默认值保持一致。CLI 会根据数据库中的最近一次成功运行时间执行跨进程限频，并使用 SQLite 锁避免并发 `fetch`。需要人工强制执行时使用 `fetch --force`。
+`min_interval_minutes` 默认值为 300 分钟（5 小时），模板 `config.example.yaml` 和代码兜底默认值保持一致。CLI 会根据数据库中的最近一次成功运行时间执行跨进程限频，并使用 SQLite 锁避免并发 `fetch`。需要人工强制执行时使用 `fetch --force`。
 
-请让 `min_interval_minutes` 保持**低于 systemd timer 的调度周期**：timer 为 24 小时（`RandomizedDelaySec=300`，即最多提前/推后 5 分钟），因此两次计划运行的间隔最小可能只有 1435 分钟。若把该值设为 1440，随机延迟会让计划任务偶尔被判为“未到间隔”而跳过，表现为某天没有下载。当前默认 1200 保留了 235 分钟余量。
+该值同时受两个约束，调整时要一起考虑：
+
+1. **必须低于 systemd timer 的调度周期。** timer 为 24 小时（`RandomizedDelaySec=300`，即最多延后 5 分钟），因此两次计划运行的最小间隔可能只有 1435 分钟。若把该值设为 1440，随机延迟会让计划任务偶尔被判为“未到间隔”而跳过，表现为某天没有下载。
+2. **要足够小，手动补跑才不会吞掉次日计划。** 下一次计划运行固定在 03:20，因此当间隔为 N 分钟时，只有 **03:20 + (1440 − N)** 之后启动的补跑才会与之冲突。默认 300 表示 `22:20` 之前的手动补跑都不影响次日凌晨的计划运行；若沿用 1200，则 `07:20` 之后补跑就会导致次日跳过。
+
+> 代价是限频作为“重复下载保险”的力度变弱：两次运行间隔只要超过 5 小时就不会被拦。对每日一次的计划任务没有影响，但如果日后提高抓取频率，应重新评估该值。
 
 ```text
 fetch skipped; last successful run was 2026-09-21T09:11:15.372058+00:00; minimum interval has 49825s remaining
@@ -315,4 +320,8 @@ sqlite3 archive/tle.db 'SELECT * FROM runs ORDER BY run_id;'
 PYTHONPATH=src python3 -m tle_aggregation.cli --config config.yaml --norad 25544 query
 ```
 
-`runs` 表记录每次下载时间、记录数和对应原始 JSON 路径；`gp_records` 表记录对象编号、名称、国际编号、历元、来源、完整原始记录和短哈希。原始 JSON 归档用于复核，SQLite 作为当前状态缓存，每个卫星只保留最新记录。
+`runs` 表记录每次下载时间、记录数和对应原始 JSON 路径；`gp_records` 表记录对象编号、名称、国际编号、历元、来源、完整原始记录和短哈希。
+
+原始 JSON 归档用于复核，SQLite 作为当前状态缓存，每个卫星只保留最新记录。
+
+> `compact --latest-only` 的判据是**按 `(source, norad_cat_id)` 分区、取 `epoch` 最大的那一行**，跨所有批次生效。因此当某个对象不出现在最新一次抓取结果中时（例如查询条件为 `EPOCH > now-10`、对象已衰减或超过 10 天未更新），它此前入库的最新时代仍会保留，`SELECT COUNT(*) FROM gp_records` 可能**大于**最近一次的 `record_count`。例如 2026-09-22 的抓取为 32,002 条，而 `gp_records` 为 32,112 行。两者不应直接比较。

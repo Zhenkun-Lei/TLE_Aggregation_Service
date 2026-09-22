@@ -48,9 +48,10 @@ def load_config(path: str | Path) -> AppConfig:
     base_url = str(source["base_url"]).rstrip("/")
     if urlparse(base_url).scheme != "https":
         raise ConfigError("Space-Track base_url must use HTTPS")
-    # The default stays below the 24h systemd timer period; otherwise the
-    # randomized daily run can be rejected by the fetch rate limiter.
-    interval = int(policy.get("min_interval_minutes", 1200))
+    # Duplicate-fetch guard. The default stays well below the 24h systemd timer
+    # period so the randomized daily run is never rejected, and short enough
+    # that an out-of-band manual catch-up does not block the next day's run.
+    interval = int(policy.get("min_interval_minutes", 300))
     if interval < 60:
         raise ConfigError("min_interval_minutes must be at least 60")
 

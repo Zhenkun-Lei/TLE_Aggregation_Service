@@ -57,8 +57,14 @@ sources:
 
         template = load_config(Path(__file__).parents[1] / "config.example.yaml")
 
-        self.assertEqual(default_interval, 1200)
+        self.assertEqual(default_interval, 300)
         self.assertEqual(template.min_interval_minutes, default_interval)
-        # The systemd timer runs once every 24h, so the minimum interval must
-        # stay lower or the randomized daily run can be skipped.
+        # The systemd timer runs once every 24h at 03:20 local, so the minimum
+        # interval must stay lower or the randomized daily run can be skipped.
         self.assertLess(default_interval, 1440)
+        # The interval must also be small enough that a manual catch-up does not
+        # block the next scheduled run. A catch-up started at X only collides
+        # with the following 03:20 run when X > 03:20 + (1440 - interval), so
+        # keeping the interval at or below 300 leaves everything before 22:20
+        # local safe.
+        self.assertLessEqual(default_interval, 300)
