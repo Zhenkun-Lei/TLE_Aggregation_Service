@@ -8,7 +8,9 @@ policy:
   # One daily run is intentionally much lower than Space-Track's GP limit.
   max_attempts_per_source: 1
   request_timeout_seconds: 60
-  min_interval_minutes: 1440
+  # Keep this below the systemd timer period (24h minus RandomizedDelaySec),
+  # otherwise the randomized daily run can be skipped by the rate limiter.
+  min_interval_minutes: 1200
   user_agent: tle-aggregation-service/0.1
 
 sources:
