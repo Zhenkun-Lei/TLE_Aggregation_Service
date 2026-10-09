@@ -5,3 +5,9 @@ __pycache__/
 .env
 config.yaml
 archive/
+
+# Analysis output caches and heavy raw dumps
+analysis_output/*.db
+analysis_output/*.json
+analysis_output/*.csv
+analysis_output/SW-Last5Years.txt
