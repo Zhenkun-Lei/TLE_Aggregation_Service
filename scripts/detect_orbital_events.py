@@ -22,8 +22,9 @@ import pandas as pd
 from datetime import datetime
 from sgp4.api import Satrec
 
-RAW_DIR = '/home/jetson/TLE_Aggregation_Service/archive/raw/spacetrack'
-OUTPUT_DIR = '/home/jetson/TLE_Aggregation_Service/analysis_output'
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+RAW_DIR = os.path.join(BASE_DIR, 'archive/raw/spacetrack')
+OUTPUT_DIR = os.path.join(BASE_DIR, 'analysis_output')
 SUMMARY_CSV = os.path.join(OUTPUT_DIR, 'satellite_summary.csv')
 SPACE_WX_FILE = os.path.join(OUTPUT_DIR, 'SW-Last5Years.txt')
 

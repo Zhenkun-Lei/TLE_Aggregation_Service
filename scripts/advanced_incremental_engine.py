@@ -25,7 +25,7 @@ import pandas as pd
 from datetime import datetime
 from sgp4.api import Satrec
 
-BASE_DIR = '/home/jetson/TLE_Aggregation_Service'
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 RAW_DIR = os.path.join(BASE_DIR, 'archive/raw/spacetrack')
 OUTPUT_DIR = os.path.join(BASE_DIR, 'analysis_output')
 DB_PATH = os.path.join(OUTPUT_DIR, 'satellite_state.db')
@@ -435,52 +435,69 @@ def process_advanced_snapshot(snapshot_file, db_path, payload_ids, name_map, spa
 def main():
     parser = argparse.ArgumentParser(description="Advanced Incremental Event Engine")
     parser.add_argument("--benchmark", action="store_true", help="Run benchmark on 2026-10-09")
+    parser.add_argument("--process-day", help="Process specific day YYYY-MM-DD")
+    parser.add_argument("--snapshot", help="Process specific snapshot JSON file")
     args = parser.parse_args()
 
-    init_advanced_db(DB_PATH, reset=True)
+    init_advanced_db(DB_PATH, reset=False)
     space_wx = load_space_weather(SW_FILE)
     payload_ids, name_map = get_payload_ids()
 
-    print("=== [Advanced Engine] Step 1: Bootstrapping & Learning Baseline (09-20 to 09-08) ===")
-    date_dirs = sorted([d for d in os.listdir(RAW_DIR) if os.path.isdir(os.path.join(RAW_DIR, d)) and d < '2026-10-09'])
-    boot_t0 = time.time()
-    for d in date_dirs:
-        for jf in sorted(glob.glob(os.path.join(RAW_DIR, d, '*.json'))):
-            count, _, t_sub = process_advanced_snapshot(jf, DB_PATH, payload_ids, name_map, space_wx, is_bootstrap=True)
-    print(f"Bootstrapped & learned baselines for {len(date_dirs)} days in {time.time()-boot_t0:.2f}s.")
-
-    # Inspect state table
+    # Check if DB has been initialized
     conn = sqlite3.connect(DB_PATH)
-    df_state = pd.read_sql_query("SELECT norad_cat_id, object_name, orbit_type, noise_sigma_a, baseline_decay_rate, baseline_bstar_median, stable_baseline_a FROM sat_state", conn)
+    cur = conn.cursor()
+    cur.execute("SELECT count(*) FROM sat_state")
+    cached_count = cur.fetchone()[0]
     conn.close()
-    print(f"\nState DB Summary:")
-    print(f"  * Cached Satellites: {len(df_state)}")
-    print(f"  * Mean Intrinsic Noise Sigma: {df_state['noise_sigma_a'].mean():.4f} km (min={df_state['noise_sigma_a'].min():.4f}, max={df_state['noise_sigma_a'].max():.4f})")
-    print(f"  * Sample State Records with Learned Baselines:")
-    print(df_state.head(4).to_string())
 
-    print("\n=== [Advanced Engine] Step 2: Executing Daily Incremental Detection on 2026-10-09 ===")
-    day_1009_files = sorted(glob.glob(os.path.join(RAW_DIR, '2026-10-09', '*.json')))
-    target_file = day_1009_files[0]
+    if cached_count == 0 or args.benchmark:
+        print("=== Initializing / Bootstrapping State Database ===")
+        init_advanced_db(DB_PATH, reset=True)
+        date_dirs = sorted([d for d in os.listdir(RAW_DIR) if os.path.isdir(os.path.join(RAW_DIR, d)) and d < '2026-10-09'])
+        boot_t0 = time.time()
+        for d in date_dirs:
+            for jf in sorted(glob.glob(os.path.join(RAW_DIR, d, '*.json'))):
+                count, _, _ = process_advanced_snapshot(jf, DB_PATH, payload_ids, name_map, space_wx, is_bootstrap=True)
+        print(f"Bootstrapped {len(date_dirs)} baseline days in {time.time()-boot_t0:.2f}s.")
+
+    # Determine target file to process
+    if args.snapshot:
+        target_file = args.snapshot
+    elif args.process_day:
+        files = sorted(glob.glob(os.path.join(RAW_DIR, args.process_day, '*.json')))
+        if not files:
+            print(f"Error: No JSON snapshot found for {args.process_day}")
+            return
+        target_file = files[-1]
+    else:
+        # Auto-detect latest snapshot file
+        all_snapshots = sorted(glob.glob(os.path.join(RAW_DIR, '*', '*.json')))
+        if not all_snapshots:
+            print("Error: No raw TLE snapshots found in archive.")
+            return
+        target_file = all_snapshots[-1]
+
+    print(f"\n=== Executing Daily Incremental Detection on: {os.path.basename(target_file)} ===")
     t_start = time.time()
     sats_checked, events_today, process_elapsed = process_advanced_snapshot(
         target_file, DB_PATH, payload_ids, name_map, space_wx, is_bootstrap=False
     )
     total_wall_time = time.time() - t_start
 
-    print("\n--- Incremental Execution Performance Metrics ---")
-    print(f"  * Total Satellites Evaluated: {sats_checked}")
-    print(f"  * Pure Processing & Gating Time: {process_elapsed:.3f} s")
-    print(f"  * Total End-to-End Execution Time: {total_wall_time:.3f} s")
-    print(f"  * Events Detected on 2026-10-09: {len(events_today)}")
+    print(f"  * Evaluated: {sats_checked} satellites")
+    print(f"  * Gating & SGP4 Verification Time: {process_elapsed:.3f} s")
+    print(f"  * Total End-to-End Time: {total_wall_time:.3f} s")
+    print(f"  * Events Detected: {len(events_today)}")
 
+    # Extract date for output CSV
+    target_date = os.path.basename(os.path.dirname(target_file))
+    out_csv = os.path.join(OUTPUT_DIR, f'advanced_incremental_events_{target_date}.csv')
     df_today = pd.DataFrame(events_today)
-    out_csv = os.path.join(OUTPUT_DIR, 'advanced_incremental_events_2026-10-09.csv')
     df_today.to_csv(out_csv, index=False, encoding='utf-8')
-    print(f"\nSaved today's events to {out_csv}")
+    print(f"  * Saved events to {out_csv}")
 
     if not df_today.empty:
-        print("\n--- Event Distribution on 2026-10-09 ---")
+        print("\n--- Event Distribution ---")
         print(df_today['event_type'].value_counts().to_string())
 
 if __name__ == '__main__':

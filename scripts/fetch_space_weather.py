@@ -11,8 +11,9 @@ import time
 import urllib.request
 import logging
 
-DEST_DIR = '/home/jetson/TLE_Aggregation_Service/analysis_output'
-ARCHIVE_DIR = '/home/jetson/TLE_Aggregation_Service/archive/space_weather'
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+DEST_DIR = os.path.join(BASE_DIR, 'analysis_output')
+ARCHIVE_DIR = os.path.join(BASE_DIR, 'archive/space_weather')
 URL = 'https://celestrak.org/SpaceData/SW-Last5Years.txt'
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
