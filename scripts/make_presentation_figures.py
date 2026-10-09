@@ -106,32 +106,48 @@ def make_fig3_methodology():
              fontsize=9, color=TEXT_DARK, ha='center', linespacing=1.25)
 
     # Subplot 2: RTN Decomposition Visual
+    ax2.set_xlim(0, 1)
+    ax2.set_ylim(0, 1)
     ax2.axis('off')
     ax2.text(0.5, 0.96, "动力学冲量反演与环境归因", fontsize=12, weight='bold', color=PRIMARY, ha='center')
 
-    theta = np.linspace(0, np.pi/2, 100)
-    r = 0.5
-    cx, cy = 0.25, 0.25
-    ax2.plot(cx + r*np.cos(theta), cy + r*np.sin(theta), color='#B0BEC5', lw=2.0, ls='--')
-    ax2.plot(cx + r*np.cos(np.pi/4), cy + r*np.sin(np.pi/4), 'o', color=PRIMARY, markersize=9)
-    ax2.text(cx + r*np.cos(np.pi/4) - 0.05, cy + r*np.sin(np.pi/4) - 0.07, "卫星当前位置", fontsize=8.5, color=PRIMARY, weight='bold')
+    # Orbit trajectory arc
+    cx, cy = 0.15, 0.15
+    r = 0.58
+    theta = np.linspace(0.18, 1.35, 100)
+    ax2.plot(cx + r*np.cos(theta), cy + r*np.sin(theta), color='#CFD8DC', lw=2.0, ls='--')
 
-    # RTN Vectors
-    sx, sy = cx + r*np.cos(np.pi/4), cy + r*np.sin(np.pi/4)
-    ax2.annotate('Δv_T (切向加/减速)', xy=(sx - 0.18, sy + 0.18), xytext=(sx, sy),
-                 arrowprops=dict(arrowstyle="->", color=SECONDARY, lw=2.2), fontsize=8.5, color=SECONDARY, weight='bold')
-    ax2.annotate('Δv_N (法向倾角控制)', xy=(sx + 0.15, sy + 0.15), xytext=(sx, sy),
-                 arrowprops=dict(arrowstyle="->", color='#8E44AD', lw=2.2), fontsize=8.5, color='#8E44AD', weight='bold')
-    ax2.annotate('Δv_R (径向扰动)', xy=(sx + 0.18, sy - 0.18), xytext=(sx, sy),
-                 arrowprops=dict(arrowstyle="->", color='#E67E22', lw=2.2), fontsize=8.5, color='#E67E22', weight='bold')
+    # Satellite position
+    sx = cx + r*np.cos(np.pi/4)
+    sy = cy + r*np.sin(np.pi/4)
+    ax2.plot(sx, sy, 'o', color=PRIMARY, markersize=8.5, zorder=5)
+    ax2.text(sx - 0.06, sy - 0.09, "卫星当前位置", fontsize=8.5, color=PRIMARY, weight='bold', ha='center', va='top')
+
+    # Vector 1: Tangential (Along-track) -> Top-Left
+    tx, ty = sx - 0.18, sy + 0.17
+    ax2.annotate('', xy=(tx, ty), xytext=(sx, sy),
+                 arrowprops=dict(arrowstyle="->", color=SECONDARY, lw=2.2, mutation_scale=12))
+    ax2.text(tx - 0.03, ty + 0.02, "ΔV_T (切向加/减速)", fontsize=8.5, color=SECONDARY, weight='bold', ha='right', va='bottom')
+
+    # Vector 2: Normal (Cross-track) -> Top-Right
+    nx, ny = sx + 0.05, sy + 0.22
+    ax2.annotate('', xy=(nx, ny), xytext=(sx, sy),
+                 arrowprops=dict(arrowstyle="->", color='#8E44AD', lw=2.2, mutation_scale=12))
+    ax2.text(nx + 0.03, ny + 0.02, "ΔV_N (法向倾角控制)", fontsize=8.5, color='#8E44AD', weight='bold', ha='left', va='bottom')
+
+    # Vector 3: Radial -> Right
+    rx, ry = sx + 0.20, sy - 0.06
+    ax2.annotate('', xy=(rx, ry), xytext=(sx, sy),
+                 arrowprops=dict(arrowstyle="->", color='#E67E22', lw=2.2, mutation_scale=12))
+    ax2.text(rx + 0.03, ry, "ΔV_R (径向扰动)", fontsize=8.5, color='#E67E22', weight='bold', ha='left', va='center')
 
     # Space weather attribution card
-    wx_box = patches.FancyBboxPatch((0.08, 0.04), 0.84, 0.32, boxstyle="round,pad=0.02",
+    wx_box = patches.FancyBboxPatch((0.06, 0.04), 0.88, 0.32, boxstyle="round,pad=0.02",
                                     facecolor='#F9FBE7', edgecolor='#AFB42B', linewidth=1.5)
     ax2.add_patch(wx_box)
-    ax2.text(0.50, 0.27, "BSTAR 阻力项与空间天气解耦", fontsize=9.5, weight='bold', color='#827717', ha='center')
-    ax2.text(0.50, 0.13, "Ap >= 25 (地磁暴) -> 全域高层大气膨胀\nAp < 15 (平静期) -> 航天器自身姿态机动",
-             fontsize=8.5, color=TEXT_DARK, ha='center', linespacing=1.2)
+    ax2.text(0.50, 0.26, "BSTAR 阻力项与空间天气解耦", fontsize=9.5, weight='bold', color='#827717', ha='center')
+    ax2.text(0.50, 0.12, "Ap >= 25 (地磁暴/高层大气受热膨胀) -> 判定环境阻力扰动\nAp < 15 (地磁平静期) -> 判定航天器自主姿态/轨道控制",
+             fontsize=8.5, color=TEXT_DARK, ha='center', linespacing=1.25)
 
     plt.tight_layout()
     out_path = os.path.join(OUTPUT_DIR, 'ppt_fig3_methodology.png')
